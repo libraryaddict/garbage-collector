@@ -4,6 +4,7 @@ import {
   getWorkshed,
   Item,
   myAdventures,
+  print,
   reverseNumberology,
   runChoice,
   totalTurnsPlayed,
@@ -16,13 +17,14 @@ import { garboValue, sessionSinceStart } from "./session";
 
 function coldMedicineCabinet(): void {
   if (getWorkshed() !== $item`cold medicine cabinet`) return;
-
+  print("DEBUG: Confirming Garbo knows you have the medicine cabinet.");
   if (
     property.getNumber("_coldMedicineConsults") >= 5 ||
     property.getNumber("_nextColdMedicineConsult") > totalTurnsPlayed()
   ) {
     return;
   }
+  print("DEBUG: Confirming garbo believes it's time to get a prescription.");
   const options = visitUrl("campground.php?action=workshed");
   let i = 0;
   let match;
@@ -38,9 +40,14 @@ function coldMedicineCabinet(): void {
     const item = descToItem(match[1]);
     itemChoices.set(item, i);
   }
+  for (const item of itemChoices.keys()) {
+    print(`DEBUG: ${item} exists in our itemChoices map`);
+  }
 
   const bestItem = argmax(Array.from(itemChoices.keys()).map((i) => [i, garboValue(i)]));
+  print(`DEBUG: Best item chosen as ${bestItem}.`);
   const bestChoice = itemChoices.get(bestItem);
+  print(`DEBUG: Submitting Choice entry ${bestChoice}.`);
   if (bestChoice && bestChoice > 0) {
     visitUrl("campground.php?action=workshed");
     runChoice(bestChoice);
