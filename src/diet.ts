@@ -253,12 +253,12 @@ function pillCheck(): void {
 
 const saladFork = $item`Ol' Scratch's salad fork`;
 const frostyMug = $item`Frosty's frosty mug`;
-const spleenCleaners = new Map([
+const spleenCleaners = new Map<Item, number>([
   [$item`extra-greasy slider`, 5],
   [$item`jar of fermented pickle juice`, 5],
   [$item`mojo filter`, 1],
 ]);
-const stomachLiverCleaners = new Map([
+const stomachLiverCleaners = new Map<Item, [number, number]>([
   [$item`spice melange`, [-3, -3]],
   [$item`synthetic dog hair pill`, [0, -1]],
   [$item`cuppa Sobrie tea`, [0, -1]],
@@ -747,6 +747,9 @@ export function consumeDiet(diet: Diet<Note>, name: DietName): void {
         }
 
         const spleenCleaned = spleenCleaners.get(menuItem.item);
+        logprint(
+          `I'm DanceCommander6, and my weird fucking mafia says that the item ${menuItem.item} cleans ${spleenCleaned} spleen.`
+        );
         if (spleenCleaned) {
           countToConsume = Math.min(countToConsume, Math.floor(mySpleenUse() / spleenCleaned));
           logprint(`Based on organ-cleaning, planning to consume ${countToConsume}.`);
