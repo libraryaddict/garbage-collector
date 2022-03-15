@@ -754,7 +754,13 @@ export function consumeDiet(diet: Diet<Note>, name: DietName): void {
           countToConsume = Math.min(countToConsume, Math.floor(mySpleenUse() / spleenCleaned));
           logprint(`Based on organ-cleaning, planning to consume ${countToConsume}.`);
         } else {
-          logprint(`By the way, my spleen cleaners currently look like ${spleenCleaners}`);
+          logprint(
+            `By the way, my spleen cleaners currently look like ${Array.from(
+              spleenCleaners.entries()
+            )
+              .map(([item, qty]) => `key: ${item}, value: ${qty}`)
+              .join("; ")}`
+          );
         }
       }
 
