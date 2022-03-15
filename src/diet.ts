@@ -753,6 +753,8 @@ export function consumeDiet(diet: Diet<Note>, name: DietName): void {
         if (spleenCleaned) {
           countToConsume = Math.min(countToConsume, Math.floor(mySpleenUse() / spleenCleaned));
           logprint(`Based on organ-cleaning, planning to consume ${countToConsume}.`);
+        } else {
+          logprint(`By the way, my spleen cleaners currently look like ${spleenCleaners}`);
         }
       }
 
