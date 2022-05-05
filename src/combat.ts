@@ -43,7 +43,6 @@ import {
   $skill,
   $slot,
   $thralls,
-  clamp,
   get,
   getTodaysHolidayWanderers,
   have,
@@ -138,8 +137,8 @@ export function maxPassiveDamage(): number {
 }
 
 export function shouldRedigitize(): boolean {
-  const digitizesLeft = clamp(3 - get("_sourceTerminalDigitizeUses"), 0, 3);
-  const monsterCount = get("_sourceTerminalDigitizeMonsterCount") + 1;
+  const digitizesLeft = SourceTerminal.getDigitizeUsesRemaining();
+  const monsterCount = SourceTerminal.getDigitizeMonsterCount() + 1;
   // triangular number * 10 - 3
   const digitizeAdventuresUsed = monsterCount * (monsterCount + 1) * 5 - 3;
   // Redigitize if fewer adventures than this digitize usage.
@@ -410,6 +409,12 @@ export class Macro extends StrictMacro {
     return this.tryHaveSkill($skill`Sing Along`)
       .tryHaveSkill($skill`Curse of Weaksauce`)
       .externalIf(
+        myFamiliar() === $familiar`Grey Goose` &&
+          $familiar`Grey Goose`.experience >= 400 &&
+          !get("_meatifyMatterUsed"),
+        Macro.trySkill($skill`Meatify Matter`)
+      )
+      .externalIf(
         get("cosmicBowlingBallReturnCombats") < 1,
         Macro.trySkill($skill`Bowl Straight Up`)
       )
@@ -558,6 +563,12 @@ export class Macro extends StrictMacro {
     }
 
     return this.tryHaveSkill($skill`Sing Along`)
+      .externalIf(
+        myFamiliar() === $familiar`Grey Goose` &&
+          $familiar`Grey Goose`.experience >= 400 &&
+          !get("_meatifyMatterUsed"),
+        Macro.trySkill($skill`Meatify Matter`)
+      )
       .tryHaveItem($item`Rain-Doh blue balls`)
       .externalIf(get("lovebugsUnlocked"), Macro.trySkill($skill`Summon Love Gnats`))
       .tryHaveSkill(classStun)
@@ -574,13 +585,22 @@ export class Macro extends StrictMacro {
   }
 }
 
-export function withMacro<T>(macro: Macro, action: () => T): T {
+/**
+ * Attempt to perform a nonstandard combat-starting Action with a Macro
+ * @param macro The Macro to attempt to use
+ * @param action The combat-starting action to attempt
+ * @param tryAuto Whether or not we should try to resolve the combat with an autoattack; autoattack macros can fail against special monsters, and thus we have to submit a macro with Macro.save() regardless
+ * @returns The output of your specified action function (typically void)
+ */
+export function withMacro<T>(macro: Macro, action: () => T, tryAuto = false): T {
   if (getAutoAttack() !== 0) setAutoAttack(0);
+  if (tryAuto) macro.setAutoAttack();
   macro.save();
   try {
     return action();
   } finally {
     Macro.clearSaved();
+    if (tryAuto) setAutoAttack(0);
   }
 }
 

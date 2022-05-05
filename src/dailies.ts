@@ -35,6 +35,7 @@ import {
   toInt,
   toItem,
   toSlot,
+  toUrl,
   use,
   useFamiliar,
   useSkill,
@@ -58,6 +59,7 @@ import {
   BeachComb,
   ChateauMantegna,
   ensureEffect,
+  findLeprechaunMultiplier,
   get,
   getModifier,
   have,
@@ -75,8 +77,8 @@ import {
   coinmasterPrice,
   globalOptions,
   HIGHLIGHT,
-  leprechaunMultiplier,
   logMessage,
+  realmAvailable,
   tryFeast,
 } from "./lib";
 import { withStash } from "./clan";
@@ -98,6 +100,7 @@ export function dailySetup(): void {
   prepFamiliars();
   dailyBuffs();
   configureMisc();
+  nepQuest();
   volcanoDailies();
   cheat();
   tomeSummons();
@@ -268,7 +271,7 @@ function horse(): void {
 }
 
 function dailyBuffs(): void {
-  BeachComb.tryHead($effect`Do I Know You From Somewhere?`);
+  if (have($item`Beach Comb`)) BeachComb.tryHead($effect`Do I Know You From Somewhere?`);
 
   if (
     !get("_clanFortuneBuffUsed") &&
@@ -282,9 +285,10 @@ function dailyBuffs(): void {
     cliExecute("summon Preternatural Greed");
   }
 
-  while (SourceTerminal.have() && SourceTerminal.getEnhanceUses() < 3) {
-    cliExecute("terminal enhance meat.enh");
+  while (SourceTerminal.have() && SourceTerminal.enhanceUsesRemaining() > 0) {
+    SourceTerminal.enhance($effect`meat.enh`);
   }
+
   if (!get("_madTeaParty")) {
     retrieveItem($item`filthy knitted dread sack`);
     ensureEffect($effect`Down the Rabbit Hole`);
@@ -366,8 +370,26 @@ function configureVykea() {
   }
 }
 
+function nepQuest(): void {
+  if (!(get("neverendingPartyAlways") || get("_neverendingPartyToday"))) return;
+
+  if (get("_questPartyFair") === "unstarted") {
+    visitUrl(toUrl($location`The Neverending Party`));
+    if (["food", "booze", "trash", "dj"].includes(get("_questPartyFairQuest"))) {
+      runChoice(1); // Accept quest
+    } else {
+      runChoice(2); // Decline quest
+    }
+  }
+
+  if (["food", "booze"].includes(get("_questPartyFairQuest"))) {
+    print("Gerald/ine quest!", HIGHLIGHT);
+    globalOptions.clarasBellClaimed = true;
+  }
+}
+
 function volcanoDailies(): void {
-  if (!(get("hotAirportAlways") || get("_hotAirportToday"))) return;
+  if (!realmAvailable("hot")) return;
   if (!get("_volcanoItemRedeemed")) checkVolcanoQuest();
 
   if (!get("_infernoDiscoVisited")) {
@@ -393,43 +415,57 @@ function volcanoDailies(): void {
     }
   }
 }
+
+type VolcanoItem = { quantity: number; item: Item; choice: number };
+
+function volcanoItemValue({ quantity, item }: VolcanoItem): number {
+  const basePrice = retrievePrice(item, quantity);
+  if (basePrice >= 0) return basePrice;
+  if (item === $item`fused fuse`) {
+    // Check if clara's bell is available and unused
+    if (!have($item`Clara's bell`) || globalOptions.clarasBellClaimed) return Infinity;
+    // Check if we can use Clara's bell for Yachtzee
+    // If so, we call the opportunity cost of this about 40k
+    if (realmAvailable("sleaze") && have($item`fishy pipe`) && !get("_fishyPipeUsed")) {
+      return quantity * 40000;
+    } else {
+      return quantity * get("valueOfAdventure");
+    }
+  }
+  return Infinity;
+}
+
 function checkVolcanoQuest() {
   print("Checking volcano quest", HIGHLIGHT);
   visitUrl("place.php?whichplace=airport_hot&action=airport4_questhub");
   const volcoinoValue = garboValue($item`Volcoino`);
-  withProperty("valueOfInventory", 2, () => {
-    const volcanoItemValuer = (item: Item) =>
-      retrievePrice(item) ||
-      (item === $item`fused fuse` && have($item`Clara's bell`) && !get("_claraBellUsed")
-        ? get("valueOfAdventure")
-        : Infinity);
-    const bestItem = [
-      {
-        item: property.getItem("_volcanoItem1") ?? $item`none`,
-        quantity: get("_volcanoItemCount1"),
-      },
-      {
-        item: property.getItem("_volcanoItem2") ?? $item`none`,
-        quantity: get("_volcanoItemCount2"),
-      },
-      {
-        item: property.getItem("_volcanoItem3") ?? $item`none`,
-        quantity: get("_volcanoItemCount3"),
-      },
-    ].sort(
-      (a, b) => a.quantity * volcanoItemValuer(a.item) - b.quantity * volcanoItemValuer(b.item)
-    )[0];
-    if (
-      bestItem.item.tradeable &&
-      bestItem.quantity * volcanoItemValuer(bestItem.item) < volcoinoValue
-    ) {
-      withProperty("autoBuyPriceLimit", volcoinoValue, () =>
-        retrieveItem(bestItem.item, bestItem.quantity)
-      );
-    } else if (bestItem.item === $item`fused fuse`) {
-      logMessage("Grab a fused fused with your clara's bell charge while overdrunk!");
-    }
-  });
+  const bestItem = [
+    {
+      item: property.getItem("_volcanoItem1") ?? $item`none`,
+      quantity: get("_volcanoItemCount1"),
+      choice: 1,
+    },
+    {
+      item: property.getItem("_volcanoItem2") ?? $item`none`,
+      quantity: get("_volcanoItemCount2"),
+      choice: 2,
+    },
+    {
+      item: property.getItem("_volcanoItem3") ?? $item`none`,
+      quantity: get("_volcanoItemCount3"),
+      choice: 3,
+    },
+  ].reduce((a, b) => (volcanoItemValue(a) < volcanoItemValue(b) ? a : b));
+  if (bestItem.item === $item`fused fuse`) {
+    globalOptions.clarasBellClaimed = true;
+    logMessage("Grab a fused fused with your clara's bell charge while overdrunk!");
+  } else if (volcanoItemValue(bestItem) < volcoinoValue) {
+    withProperty("autoBuyPriceLimit", volcoinoValue, () =>
+      retrieveItem(bestItem.item, bestItem.quantity)
+    );
+    visitUrl("place.php?whichplace=airport_hot&action=airport4_questhub");
+    runChoice(bestItem.choice);
+  }
 }
 
 function cheat(): void {
@@ -449,7 +485,7 @@ function cheat(): void {
     { card: "Forest", item: $item`green mana` },
     { card: "Giant Growth", item: $item`green mana` },
     { card: "Gift Card", item: $item`gift card` },
-    { card: "1952 Mickey Mantle card", item: $item`1952 Mickey Mantle card` },
+    { card: "Mickey", item: $item`1952 Mickey Mantle card` },
   ]
     .filter(({ card }) => !cardsSeen.includes(card.toLowerCase()))
     .sort((a, b) => garboValue(b.item) - garboValue(a.item))
@@ -585,7 +621,7 @@ function pantogram(): void {
       : estimatedTurns() - digitizedMonstersRemaining() - embezzlerCount();
     pantogramValue = 100 * expectedBarfTurns;
   } else {
-    const lepMult = leprechaunMultiplier(meatFamiliar());
+    const lepMult = findLeprechaunMultiplier(meatFamiliar());
     const lepBonus = 2 * lepMult + Math.sqrt(lepMult);
     const totalPantsValue = (pants: Item) =>
       getModifier("Meat Drop", pants) + getModifier("Familiar Weight", pants) * lepBonus;

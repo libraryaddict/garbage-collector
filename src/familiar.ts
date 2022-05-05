@@ -8,8 +8,19 @@ import {
   myInebriety,
   weightAdjustment,
 } from "kolmafia";
-import { $effect, $familiar, $familiars, $item, $items, get, have, propertyTypes } from "libram";
-import { argmax, fairyMultiplier, leprechaunMultiplier } from "./lib";
+import {
+  $effect,
+  $familiar,
+  $familiars,
+  $item,
+  $items,
+  findFairyMultiplier,
+  findLeprechaunMultiplier,
+  get,
+  have,
+  propertyTypes,
+} from "libram";
+import { argmax, globalOptions } from "./lib";
 import { garboAverageValue, garboValue } from "./session";
 
 let _meatFamiliar: Familiar;
@@ -28,11 +39,11 @@ export function meatFamiliar(): Familiar {
         // The commerce ghost canot go underwater in most circumstances, and cannot use an amulet coin
         // We absolutely do not want that
         .filter((fam) => have(fam) && fam !== $familiar`Ghost of Crimbo Commerce`)
-        .sort((a, b) => leprechaunMultiplier(b) - leprechaunMultiplier(a));
-      const bestLepMult = leprechaunMultiplier(bestLeps[0]);
+        .sort((a, b) => findLeprechaunMultiplier(b) - findLeprechaunMultiplier(a));
+      const bestLepMult = findLeprechaunMultiplier(bestLeps[0]);
       _meatFamiliar = bestLeps
-        .filter((familiar) => leprechaunMultiplier(familiar) === bestLepMult)
-        .sort((a, b) => fairyMultiplier(b) - fairyMultiplier(a))[0];
+        .filter((familiar) => findLeprechaunMultiplier(familiar) === bestLepMult)
+        .sort((a, b) => findFairyMultiplier(b) - findFairyMultiplier(a))[0];
     }
   }
   return _meatFamiliar;
@@ -148,7 +159,11 @@ function mimicDropValue() {
   );
 }
 
-export function freeFightFamiliar(): Familiar {
+const gooseExp =
+  $familiar`Grey Goose`.experience || (have($familiar`Shorter-Order Cook`) ? 100 : 0);
+
+export function freeFightFamiliar(canMeatify = false): Familiar {
+  if (canMeatify && timeToMeatify()) return $familiar`Grey Goose`;
   const familiarValue: [Familiar, number][] = [];
 
   if (
@@ -160,6 +175,20 @@ export function freeFightFamiliar(): Familiar {
     familiarValue.push([$familiar`Pocket Professor`, 3000]);
   }
 
+  if (
+    have($familiar`Grey Goose`) &&
+    $familiar`Grey Goose`.experience < 400 &&
+    !get("_meatifyMatterUsed") &&
+    myInebriety() <= inebrietyLimit()
+  ) {
+    const experienceNeeded = 400 - (globalOptions.ascending ? gooseExp : 25);
+    const meatFromCast = 15 ** 4;
+    const estimatedExperience = 12;
+    familiarValue.push([
+      $familiar`Grey Goose`,
+      meatFromCast / (experienceNeeded / estimatedExperience),
+    ]);
+  }
   for (const familiarName of Object.keys(rotatingFamiliars)) {
     const familiar: Familiar = Familiar.get(familiarName);
     if (have(familiar)) {
@@ -191,4 +220,12 @@ export function freeFightFamiliar(): Familiar {
 
 export function pocketProfessorLectures(): number {
   return 2 + Math.ceil(Math.sqrt(familiarWeight($familiar`Pocket Professor`) + weightAdjustment()));
+}
+
+function timeToMeatify(): boolean {
+  return (
+    have($familiar`Grey Goose`) &&
+    $familiar`Grey Goose`.experience >= 400 &&
+    !get("_meatifyMatterUsed")
+  );
 }

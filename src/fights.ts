@@ -10,6 +10,7 @@ import {
   getAutoAttack,
   getCampground,
   handlingChoice,
+  haveEquipped,
   inebrietyLimit,
   isBanished,
   Item,
@@ -19,6 +20,7 @@ import {
   mallPrice,
   maximize,
   Monster,
+  myAdventures,
   myAscensions,
   myClass,
   myFamiliar,
@@ -44,7 +46,6 @@ import {
   toItem,
   toSlot,
   totalTurnsPlayed,
-  toUrl,
   use,
   useFamiliar,
   useSkill,
@@ -78,6 +79,7 @@ import {
   CrystalBall,
   ensureEffect,
   FindActionSourceConstraints,
+  findLeprechaunMultiplier,
   get,
   getTodaysHolidayWanderers,
   have,
@@ -108,12 +110,13 @@ import {
   mapMonster,
   propertyManager,
   questStep,
+  realmAvailable,
   resetDailyPreference,
   safeRestore,
   setChoice,
 } from "./lib";
 import { freeFightMood, meatMood } from "./mood";
-import { freeFightOutfit, meatOutfit, tryFillLatte } from "./outfit";
+import { freeFightOutfit, meatOutfit, tryFillLatte, waterBreathingEquipment } from "./outfit";
 import { bathroomFinance, potionSetup } from "./potions";
 import {
   embezzlerCount,
@@ -140,7 +143,7 @@ const firstChainMacro = () =>
     Macro.if_(
       "!hasskill Lecture on Relativity",
       Macro.externalIf(
-        get("_sourceTerminalDigitizeMonster") !== $monster`Knob Goblin Embezzler`,
+        SourceTerminal.getDigitizeMonster() !== $monster`Knob Goblin Embezzler`,
         Macro.tryCopier($skill`Digitize`)
       )
         .tryCopier($item`Spooky Putty sheet`)
@@ -174,6 +177,7 @@ const secondChainMacro = () =>
   ).abort();
 
 function embezzlerSetup() {
+  setLocation($location`none`);
   potionSetup(false);
   meatMood(true).execute(estimatedTurns());
   safeRestore();
@@ -280,11 +284,11 @@ function startWandererCounter() {
     return;
   }
   const digitizeNeedsStarting =
-    Counter.get("Digitize Monster") === null && get("_sourceTerminalDigitizeUses") !== 0;
+    Counter.get("Digitize Monster") === Infinity && SourceTerminal.getDigitizeUses() !== 0;
   const romanceNeedsStarting =
     get("_romanticFightsLeft") > 0 &&
-    Counter.get("Romantic Monster window begin") === null &&
-    Counter.get("Romantic Monster window end") === null;
+    Counter.get("Romantic Monster window begin") === Infinity &&
+    Counter.get("Romantic Monster window end") === Infinity;
   if (digitizeNeedsStarting || romanceNeedsStarting) {
     if (digitizeNeedsStarting) print("Starting digitize counter by visiting the Haunted Kitchen!");
     if (romanceNeedsStarting) print("Starting romance counter by visiting the Haunted Kitchen!");
@@ -397,6 +401,7 @@ export function dailyFights(): void {
             const startLectures = get("_pocketProfessorLectures");
             fightSource.run({
               macro: macro(),
+              useAuto: false,
             });
             embezzlerLog.initialEmbezzlersFought +=
               1 + get("_pocketProfessorLectures") - startLectures;
@@ -409,6 +414,17 @@ export function dailyFights(): void {
           }
           set(property, true);
           postCombatActions();
+          const predictedNextFight = getNextEmbezzlerFight();
+          if (!predictedNextFight?.draggable) doSausage();
+          // Check in case our prof gained enough exp during the profchain
+          if (
+            thesisReady() &&
+            get("beGregariousFightsLeft") <= 0 &&
+            predictedNextFight?.name !== "Orb Prediction"
+          ) {
+            deliverThesis();
+          }
+          doGhost();
           startWandererCounter();
         }
       }
@@ -417,7 +433,7 @@ export function dailyFights(): void {
 
       // REMAINING EMBEZZLER FIGHTS
       let nextFight = getNextEmbezzlerFight();
-      while (nextFight !== null) {
+      while (nextFight !== null && myAdventures()) {
         print(`Running fight ${nextFight.name}`);
         const startTurns = totalTurnsPlayed();
 
@@ -473,8 +489,9 @@ export function dailyFights(): void {
 
         // try to deliver the thesis
         const romanticMonsterImpossible =
-          Counter.get("Romantic Monster Window end") === null ||
-          (Counter.get("Romantic Monster Window begin") ?? -1) > 0 ||
+          Counter.get("Romantic Monster Window end") === Infinity ||
+          (Counter.get("Romantic Monster Window begin") > 0 &&
+            Counter.get("Romantic Monster window begin") !== Infinity) ||
           get("_romanticFightsLeft") <= 0;
         if (romanticMonsterImpossible && (!nextFight || !nextFight.draggable)) {
           doSausage();
@@ -486,6 +503,7 @@ export function dailyFights(): void {
           ) {
             deliverThesis();
           }
+          yachtzee();
         }
         doGhost();
         startWandererCounter();
@@ -500,6 +518,8 @@ type FreeFightOptions = {
   requirements?: () => Requirement[];
   noncombat?: () => boolean;
   effects?: () => Effect[];
+  // True if the macro used by this freeFight can be overridden without causing harm
+  canOverrideMacro?: boolean;
 };
 
 let bestNonCheerleaderFairy: Familiar;
@@ -550,6 +570,12 @@ class FreeFight {
     this.options = options;
   }
 
+  pickFamiliar(): Familiar {
+    const mandatory = this.options.familiar?.();
+    if (mandatory) return mandatory;
+    return freeFightFamiliar(this.options.canOverrideMacro);
+  }
+
   runAll() {
     if (!this.available()) return;
     if ((this.options.cost ? this.options.cost() : 0) > get("garbo_valueOfFreeFight", 2000)) return;
@@ -557,11 +583,7 @@ class FreeFight {
       voidMonster();
       const noncombat = !!this.options?.noncombat?.();
       if (!noncombat) {
-        useFamiliar(
-          this.options.familiar
-            ? this.options.familiar() ?? freeFightFamiliar()
-            : freeFightFamiliar()
-        );
+        useFamiliar(this.pickFamiliar());
       }
       const effects = this.options.effects?.() ?? [];
       freeFightMood(...effects).execute();
@@ -630,7 +652,7 @@ const pygmyMacro = Macro.if_(
     Macro.trySkill($skill`Feel Hatred`).item($item`divine champagne popper`)
   )
   .if_($monster`pygmy janitor`, Macro.item($item`tennis ball`))
-  .if_($monster`time-spinner prank`, Macro.basicCombat())
+  .if_($monsters`giant rubber spider, time-spinner prank`, Macro.basicCombat())
   .if_($monster`drunk pygmy`, Macro.trySkill($skill`Extract`).trySkill($skill`Sing Along`))
   .ifHolidayWanderer(Macro.basicCombat())
   .abort();
@@ -688,7 +710,10 @@ const freeFightSources = [
       visitUrl("choice.php");
       if (handlingChoice()) throw "Did not get all the way through LOV.";
     },
-    false
+    false,
+    {
+      canOverrideMacro: true,
+    }
   ),
 
   new FreeFight(
@@ -706,6 +731,7 @@ const freeFightSources = [
         )
           ? $familiar`Robortender`
           : null,
+      canOverrideMacro: true,
     }
   ),
 
@@ -723,7 +749,8 @@ const freeFightSources = [
   new FreeFight(
     () => have($skill`Evoke Eldritch Horror`) && !get("_eldritchHorrorEvoked"),
     () => useSkill($skill`Evoke Eldritch Horror`),
-    false
+    false,
+    { canOverrideMacro: true }
   ),
 
   new FreeFight(
@@ -732,6 +759,7 @@ const freeFightSources = [
     true,
     {
       cost: () => mallPrice($item`lynyrd snare`),
+      canOverrideMacro: true,
     }
   ),
 
@@ -824,6 +852,7 @@ const freeFightSources = [
     true,
     {
       cost: () => mallPrice($item`BRICKO eye brick`) + 2 * mallPrice($item`BRICKO brick`),
+      canOverrideMacro: true,
     }
   ),
 
@@ -838,7 +867,9 @@ const freeFightSources = [
           (getBestItemStealZone() && get("_fireExtinguisherCharge") >= 10 ? 2 : 3) // Save a map to use for polar vortex
       ) {
         withMacro(
-          Macro.if_($monster`time-spinner prank`, Macro.kill()).skill($skill`Use the Force`),
+          Macro.if_($monsters`giant rubber spider, time-spinner prank`, Macro.kill()).skill(
+            $skill`Use the Force`
+          ),
           () => {
             mapMonster($location`Domed City of Grimacia`, $monster`grizzled survivor`);
             runCombat();
@@ -864,7 +895,7 @@ const freeFightSources = [
               $monster`dog-alien`,
               Macro.trySkill($skill`Feel Hatred`).tryItem($item`divine champagne popper`)
             )
-            .if_($monster`time-spinner prank`, Macro.kill())
+            .if_($monsters`giant rubber spider, time-spinner prank`, Macro.kill())
             .skill($skill`Use the Force`)
         );
       }
@@ -1061,6 +1092,7 @@ const freeFightSources = [
           forceEquip: $items`Kramco Sausage-o-Matic™`,
         }),
       ],
+      canOverrideMacro: true,
     }
   ),
 
@@ -1153,6 +1185,7 @@ const freeFightSources = [
           ]),
         }),
       ],
+      canOverrideMacro: true,
     }
   ),
 
@@ -1204,7 +1237,8 @@ const freeFightSources = [
   new FreeFight(
     () => (Witchess.have() ? clamp(5 - Witchess.fightsDone(), 0, 5) : 0),
     () => Witchess.fightPiece(bestWitchessPiece()),
-    true
+    true,
+    { canOverrideMacro: true }
   ),
 
   new FreeFight(
@@ -1216,7 +1250,8 @@ const freeFightSources = [
       }
       adv1($location`The X-32-F Combat Training Snowman`, -1, "");
     },
-    false
+    false,
+    { canOverrideMacro: true }
   ),
 
   new FreeFight(
@@ -1225,11 +1260,9 @@ const freeFightSources = [
         ? clamp(10 - get("_neverendingPartyFreeTurns"), 0, 10)
         : 0,
     () => {
+      const constructedMacro = Macro.tryHaveSkill($skill`Feel Pride`).step(Macro.load());
       setNepQuestChoicesAndPrepItems();
-      adventureMacro(
-        $location`The Neverending Party`,
-        Macro.trySkill($skill`Feel Pride`).basicCombat()
-      );
+      adventureMacro($location`The Neverending Party`, constructedMacro);
     },
     true,
     {
@@ -1246,6 +1279,7 @@ const freeFightSources = [
           }
         ),
       ],
+      canOverrideMacro: true,
     }
   ),
 
@@ -1254,9 +1288,10 @@ const freeFightSources = [
     () => {
       const monster = locketMonster();
       if (!monster) return;
-      withMacro(Macro.basicCombat(), () => CombatLoversLocket.reminisce(monster));
+      CombatLoversLocket.reminisce(monster);
     },
-    true
+    true,
+    { canOverrideMacro: true }
   ),
 
   // Get a li'l ninja costume for 150% item drop
@@ -1842,17 +1877,6 @@ export function freeFights(): void {
 }
 
 function setNepQuestChoicesAndPrepItems() {
-  if (get("_questPartyFair") === "unstarted") {
-    visitUrl(toUrl($location`The Neverending Party`));
-    if (["food", "booze"].includes(get("_questPartyFairQuest"))) {
-      print("Gerald/ine quest!", HIGHLIGHT);
-    }
-    if (["food", "booze", "trash", "dj"].includes(get("_questPartyFairQuest"))) {
-      runChoice(1); // Accept quest
-    } else {
-      runChoice(2); // Decline quest
-    }
-  }
   const quest = get("_questPartyFairQuest");
 
   if (quest === "food") {
@@ -1902,7 +1926,9 @@ function deliverThesis(): void {
   if (
     have($item`Powerful Glove`) &&
     !have($effect`Triple-Sized`) &&
-    get("_powerfulGloveBatteryPowerUsed") <= 95
+    get("_powerfulGloveBatteryPowerUsed") <= 95 &&
+    // We only get triple-sized if it doesn't lose us a replace enemy use
+    (get("_powerfulGloveBatteryPowerUsed") % 10 === 5 || !doingExtrovermectin())
   ) {
     cliExecute("checkpoint");
     equip($slot`acc1`, $item`Powerful Glove`);
@@ -1928,7 +1954,9 @@ function deliverThesis(): void {
 
   adventureMacro(
     thesisLocation,
-    Macro.if_($monster`time-spinner prank`, Macro.basicCombat()).skill($skill`deliver your thesis!`)
+    Macro.if_($monsters`giant rubber spider, time-spinner prank`, Macro.basicCombat()).skill(
+      $skill`deliver your thesis!`
+    )
   );
   postCombatActions();
 }
@@ -1937,7 +1965,7 @@ function doSausage() {
   if (!kramcoGuaranteed()) {
     return;
   }
-  useFamiliar(freeFightFamiliar());
+  useFamiliar(freeFightFamiliar(true));
   freeFightOutfit(new Requirement([], { forceEquip: $items`Kramco Sausage-o-Matic™` }));
   adventureMacroAuto(
     determineDraggableZoneAndEnsureAccess(),
@@ -1953,7 +1981,7 @@ function doGhost() {
   if (!have($item`protonic accelerator pack`) || get("questPAGhost") === "unstarted") return;
   const ghostLocation = get("ghostLocation");
   if (!ghostLocation) return;
-  useFamiliar(freeFightFamiliar());
+  useFamiliar(freeFightFamiliar(true));
   freeFightOutfit(new Requirement([], { forceEquip: $items`protonic accelerator pack` }));
   adventureMacro(ghostLocation, Macro.ghostBustin());
   postCombatActions();
@@ -2158,4 +2186,58 @@ export function estimatedTentacles(): number {
     const avail = source.tentacle ? source.available() : 0;
     return typeof avail === "number" ? avail : toInt(avail);
   });
+}
+
+function yachtzee(): void {
+  if (!realmAvailable("sleaze") || !have($effect`Fishy`)) return;
+
+  for (const { available, success } of [
+    {
+      available: have($item`Clara's bell`) && !globalOptions.clarasBellClaimed,
+      success: () => {
+        globalOptions.clarasBellClaimed = true;
+        if (use($item`Clara's bell`)) return true;
+        return false;
+      },
+    },
+    {
+      available: have($item`Eight Days a Week Pill Keeper`) && !get("_freePillKeeperUsed"),
+      success: () => {
+        if (cliExecute("pillkeeper noncombat") && get("_freePillKeeperUsed")) {
+          // Defense against mis-set counters
+          set("_freePillKeeperUsed", true);
+          return true;
+        }
+        return false;
+      },
+    },
+  ]) {
+    if (available) {
+      useFamiliar(
+        Familiar.all()
+          .filter(
+            (familiar) =>
+              have(familiar) && familiar.underwater && familiar !== $familiar`Robortender`
+          )
+          .sort((a, b) => findLeprechaunMultiplier(b) - findLeprechaunMultiplier(a))[0] ??
+          $familiar`none`
+      );
+
+      const underwaterBreathingGear = waterBreathingEquipment.find((item) => have(item));
+      if (!underwaterBreathingGear) return;
+      const equippedOutfit = new Requirement(["meat", "-tie"], {
+        forceEquip: [underwaterBreathingGear],
+      }).maximize();
+      if (haveEquipped($item`The Crown of Ed the Undying`)) cliExecute("edpiece fish");
+
+      if (!equippedOutfit || !success()) return;
+
+      setChoice(918, 2);
+      adventureMacroAuto($location`The Sunken Party Yacht`, Macro.abort());
+      if (get("lastEncounter") === "Yacht, See?") {
+        adventureMacroAuto($location`The Sunken Party Yacht`, Macro.abort());
+      }
+      return;
+    }
+  }
 }

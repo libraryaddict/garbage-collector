@@ -26,7 +26,6 @@ import {
   totalTurnsPlayed,
   use,
   useFamiliar,
-  userConfirm,
   visitUrl,
   xpath,
 } from "kolmafia";
@@ -73,6 +72,7 @@ import {
   questStep,
   safeRestore,
   setChoice,
+  userConfirmDialog,
 } from "./lib";
 import { meatMood } from "./mood";
 import postCombatActions from "./post";
@@ -137,7 +137,7 @@ function barfTurn() {
     get("questPAGhost") !== "unstarted" &&
     ghostLocation
   ) {
-    useFamiliar(freeFightFamiliar());
+    useFamiliar(freeFightFamiliar(true));
     freeFightOutfit(
       new Requirement(ghostLocation === $location`The Icy Peak` ? ["Cold Resistance 5 min"] : [], {
         forceEquip: $items`protonic accelerator pack`,
@@ -151,11 +151,11 @@ function barfTurn() {
     get("lastVoteMonsterTurn") < totalTurnsPlayed() &&
     get("_voteFreeFights") < 3
   ) {
-    useFamiliar(freeFightFamiliar());
+    useFamiliar(freeFightFamiliar(true));
     freeFightOutfit(new Requirement([], { forceEquip: $items`"I Voted!" sticker` }));
     adventureMacroAuto(determineDraggableZoneAndEnsureAccess(), Macro.basicCombat());
   } else if (myInebriety() <= inebrietyLimit() && !embezzlerUp && kramcoGuaranteed()) {
-    useFamiliar(freeFightFamiliar());
+    useFamiliar(freeFightFamiliar(true));
     freeFightOutfit(new Requirement([], { forceEquip: $items`Kramco Sausage-o-Matic™` }));
     adventureMacroAuto(determineDraggableZoneAndEnsureAccess(), Macro.basicCombat());
   } else if (
@@ -165,7 +165,7 @@ function barfTurn() {
     get("cursedMagnifyingGlassCount") === 13 &&
     get("_voidFreeFights") < 5
   ) {
-    useFamiliar(freeFightFamiliar());
+    useFamiliar(freeFightFamiliar(true));
     freeFightOutfit(new Requirement([], { forceEquip: $items`cursed magnifying glass` }));
     adventureMacroAuto(determineDraggableZoneAndEnsureAccess(), Macro.basicCombat());
   } else {
@@ -262,13 +262,20 @@ export function canContinue(): boolean {
 }
 
 export function main(argString = ""): void {
-  sinceKolmafiaRevision(26239);
+  sinceKolmafiaRevision(26321);
   print(`${process.env.GITHUB_REPOSITORY}@${process.env.GITHUB_SHA}`);
   const forbiddenStores = property.getString("forbiddenStores").split(",");
   if (!forbiddenStores.includes("3408540")) {
     // Van & Duffel's Baleet Shop
     forbiddenStores.push("3408540");
     set("forbiddenStores", forbiddenStores.join(","));
+  }
+
+  if (get("garbo_autoUserConfirm", false)) {
+    print(
+      "I have set auto-confirm to true and accept all ramifications that come with that.",
+      "red"
+    );
   }
 
   if (
@@ -282,8 +289,9 @@ export function main(argString = ""): void {
   }
 
   if (!get("garbo_skipAscensionCheck", false) && (!get("kingLiberated") || myLevel() < 13)) {
-    const proceedRegardless = userConfirm(
-      "Looks like your ascension may not be done yet. Running garbo in an unintended character state can result in serious injury and even death. Are you sure you want to garbologize?"
+    const proceedRegardless = userConfirmDialog(
+      "Looks like your ascension may not be done yet. Running garbo in an unintended character state can result in serious injury and even death. Are you sure you want to garbologize?",
+      true
     );
     if (!proceedRegardless) {
       throw new Error("User interrupt requested. Stopping Garbage Collector.");
@@ -332,10 +340,11 @@ export function main(argString = ""): void {
 
   if (stashItems.length > 0) {
     if (
-      userConfirm(
+      userConfirmDialog(
         `Garbo has detected that you have the following items still out of the stash from a previous run of garbo: ${stashItems
           .map((item) => item.name)
-          .join(",")}. Would you like us to return these to the stash now?`
+          .join(",")}. Would you like us to return these to the stash now?`,
+        true
       )
     ) {
       const clanIdOrName = get("garbo_stashClan", "none");
@@ -458,6 +467,7 @@ export function main(argString = ""): void {
       allowNonMoodBurning: !globalOptions.ascending,
       allowSummonBurning: true,
       libramSkillsSoftcore: "none", // Don't cast librams when mana burning, handled manually based on sale price
+      valueOfInventory: 2,
     });
     let bestHalloweiner = 0;
     if (haveInCampground($item`haunted doghouse`)) {
@@ -517,7 +527,7 @@ export function main(argString = ""): void {
         dailySetup();
 
         setDefaultMaximizeOptions({
-          preventEquip: $items`broken champagne bottle, Spooky Putty snake, Spooky Putty mitre, Spooky Putty leotard, Spooky Putty ball, papier-mitre, papier-mâchéte, papier-mâchine gun, papier-masque, papier-mâchuridars, smoke ball`,
+          preventEquip: $items`broken champagne bottle, Spooky Putty snake, Spooky Putty mitre, Spooky Putty leotard, Spooky Putty ball, papier-mitre, papier-mâchéte, papier-mâchine gun, papier-masque, papier-mâchuridars, smoke ball, stinky fannypack`,
           preventSlot: $slots`buddy-bjorn, crown-of-thrones`,
         });
 
@@ -541,7 +551,7 @@ export function main(argString = ""): void {
               availableAmount($item`FunFunds™`) >= 20 &&
               !have($item`one-day ticket to Dinseylandfill`)
             ) {
-              print("Buying a one-day tickets", HIGHLIGHT);
+              print("Buying a one-day ticket", HIGHLIGHT);
               buy(
                 $coinmaster`The Dinsey Company Store`,
                 1,

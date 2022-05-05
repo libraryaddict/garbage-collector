@@ -4,6 +4,7 @@ import {
   cliExecute,
   eat,
   Familiar,
+  getLocketMonsters,
   handlingChoice,
   haveSkill,
   inebrietyLimit,
@@ -19,7 +20,6 @@ import {
   myMaxmp,
   myMp,
   myTurncount,
-  numericModifier,
   print,
   printHtml,
   restoreHp,
@@ -30,17 +30,19 @@ import {
   toUrl,
   use,
   useFamiliar,
+  userConfirm,
   useSkill,
   visitUrl,
 } from "kolmafia";
 import {
-  $familiar,
   $item,
   $location,
+  $monster,
   $skill,
   ActionSource,
   bestLibramToCast,
   ChateauMantegna,
+  CombatLoversLocket,
   ensureFreeRun,
   get,
   getKramcoWandererChance,
@@ -72,6 +74,7 @@ export const globalOptions: {
   wishAnswer: boolean;
   simulateDiet: boolean;
   noDiet: boolean;
+  clarasBellClaimed: boolean;
 } = {
   stopTurncount: null,
   ascending: false,
@@ -82,6 +85,7 @@ export const globalOptions: {
   wishAnswer: false,
   simulateDiet: false,
   noDiet: false,
+  clarasBellClaimed: get("_claraBellUsed"),
 };
 
 export type BonusEquipMode = "free" | "embezzler" | "dmt" | "barf";
@@ -164,7 +168,12 @@ export function mapMonster(location: Location, monster: Monster): void {
     mapPage = visitUrl(toUrl(location), false, true);
     if (mapPage.includes("Leading Yourself Right to Them")) break;
     // Time-pranks can show up here, annoyingly
-    if (mapPage.includes("<!-- MONSTERID: 1965 -->")) runCombat(Macro.attack().repeat().toString());
+    if (
+      mapPage.includes("<!-- MONSTERID: 1965 -->") ||
+      mapPage.includes("<!-- MONSTERID: 1622  -->")
+    ) {
+      runCombat(Macro.attack().repeat().toString());
+    }
     if (handlingChoice()) runChoice(-1);
     if (myTurncount() > myTurns + 1) throw `Map the monsters unsuccessful?`;
     if (tries === 9) throw `Stuck trying to Map the monsters.`;
@@ -244,22 +253,6 @@ export function kramcoGuaranteed(): boolean {
   return have($item`Kramco Sausage-o-Matic™`) && getKramcoWandererChance() >= 1;
 }
 
-export function leprechaunMultiplier(familiar: Familiar): number {
-  if (familiar === $familiar`Mutant Cactus Bud`) {
-    return numericModifier(familiar, "Leprechaun Effectiveness", 1, $item`none`);
-  }
-  const meatBonus = numericModifier(familiar, "Meat Drop", 1, $item`none`);
-  return Math.pow(Math.sqrt(meatBonus / 2 + 55 / 4 + 3) - Math.sqrt(55) / 2, 2);
-}
-
-export function fairyMultiplier(familiar: Familiar): number {
-  if (familiar === $familiar`Mutant Fire Ant`) {
-    return numericModifier(familiar, "Fairy Effectiveness", 1, $item`none`);
-  }
-  const itemBonus = numericModifier(familiar, "Item Drop", 1, $item`none`);
-  return Math.pow(Math.sqrt(itemBonus + 55 / 4 + 3) - Math.sqrt(55) / 2, 2);
-}
-
 const log: string[] = [];
 
 export function logMessage(message: string): void {
@@ -313,6 +306,10 @@ export function printHelpMenu(): void {
     +--------------------------+-----------------------------------------------------------------------------------------------+
     |       garbo_buyPass      | Set to true to buy a dinsey day pass with FunFunds at the end of the day, if possible.        |
     +--------------------------+-----------------------------------------------------------------------------------------------+
+    |   garbo_autoUserConfirm  | **WARNING: Experimental** Don't show user confirm dialogs, instead automatically select yes/no|
+    |                          | in a way that will allow garbo to continue executing. Useful for scripting/headless. Risky and|
+    |                          |  potentially destructive.                                                                     |
+    +--------------------------+-----------------------------------------------------------------------------------------------+
     |           Note:          | You can manually set these properties, but it's recommended that you use the relay interface. |
     +--------------------------+-----------------------------------------------------------------------------------------------+</pre>`);
 }
@@ -322,14 +319,32 @@ export function printHelpMenu(): void {
  * @returns The expected value of using a pillkeeper charge to fight an embezzler
  */
 export function pillkeeperOpportunityCost(): number {
-  // Can't fight an embezzler without treasury access
-  // If we have no other way to start a chain, returns 50k to represent the cost of a pocket wish
-  return canAdv($location`Cobb's Knob Treasury`, false)
-    ? (ChateauMantegna.have() && !ChateauMantegna.paintingFought()) ||
-      (have($item`Clan VIP Lounge key`) && !get("_photocopyUsed"))
-      ? 15000
-      : WISH_VALUE
-    : 0;
+  const canTreasury = canAdv($location`Cobb's Knob Treasury`, false);
+
+  const alternateUse = [
+    { can: canTreasury, value: 3 * get("valueOfAdventure") },
+    {
+      can: realmAvailable("sleaze"),
+      value: 40000,
+    },
+  ]
+    .filter((x) => x.can)
+    .sort((a, b) => b.value - a.value)[0];
+  const alternateUseValue = alternateUse?.value;
+
+  if (!alternateUseValue) return 0;
+  if (!canTreasury) return alternateUseValue;
+
+  const embezzler = $monster`Knob Goblin Embezzler`;
+  const canStartChain = [
+    CombatLoversLocket.have() && getLocketMonsters()[embezzler.name],
+    ChateauMantegna.have() &&
+      ChateauMantegna.paintingMonster() === embezzler &&
+      !ChateauMantegna.paintingFought(),
+    have($item`Clan VIP Lounge key`) && !get("_photocopyUsed"),
+  ].some((x) => x);
+
+  return canStartChain ? alternateUseValue : WISH_VALUE;
 }
 
 /**
@@ -413,4 +428,21 @@ export function getChoiceOption(partialText: string): number {
     }
   }
   return -1;
+}
+
+/**
+ * Confirmation dialog that supports automatic resolution via garbo_autoUserConfirm preference
+ * @param msg string to display in confirmation dialog
+ * @param defaultValue default answer if user doesn't provide one
+ * @param timeOut time to show dialog before submitting default value
+ * @returns answer to confirmation dialog
+ */
+export function userConfirmDialog(msg: string, defaultValue: boolean, timeOut?: number): boolean {
+  if (get("garbo_autoUserConfirm", false)) {
+    print(`Automatically selected ${defaultValue} for ${msg}`, "red");
+    return defaultValue;
+  }
+
+  if (timeOut) return userConfirm(msg, timeOut, defaultValue);
+  return userConfirm(msg);
 }
